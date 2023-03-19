@@ -8,29 +8,14 @@
 #include <itkDiscreteGaussianImageFilter.h>
 #include <itkStatisticsImageFilter.h>
 #include <bits/stdc++.h>
+
 using namespace std;
 
-double getVariance(list<int> neighbors, const int mean) {
-    const size_t sz = neighbors.size();
-    if (sz <= 1) {
-        return 0.0;
-    }
-
-    // Now calculate the variance
-    auto variance_func = [&mean, &sz](int accumulator, const int& val) {
-        return accumulator + ((val - mean)*(val - mean) / (sz - 1));
-    };
-
-    return std::accumulate(neighbors.begin(), neighbors.end(), 0.0, variance_func);
-}
-
-double getMean(list<int> neighbors) {
-    const size_t sz = neighbors.size();
-    if (sz <= 1) {
-        return 0.0;
-    }
-
-    return std::accumulate(neighbors.begin(), neighbors.end(), 0.0) / sz;
+// Compute the weight for a given voxel value, mean, and variance using the Wiener filter equation
+double computeWeight(double value, double mean, double variance, double noisePower) {
+    double signalPower = (value - mean) * (value - mean); // assume the signal power is equal to the square of the difference between the voxel value and the mean
+    double weight = (noisePower / (noisePower + signalPower));
+    return weight;
 }
 
 int main(int argc, char * argv[])
@@ -53,7 +38,7 @@ int main(int argc, char * argv[])
     using ImageType = itk::Image<PixelType, Dimension>;
     using ReaderType = itk::ImageFileReader<ImageType>;
 
-    // read input image
+    // Read input image
     ReaderType::Pointer  reader = ReaderType::New();
     reader->SetFileName(inputFileName);
     try
@@ -67,40 +52,23 @@ int main(int argc, char * argv[])
         return EXIT_FAILURE;
     }
 
-    typedef itk::DiscreteGaussianImageFilter<ImageType, ImageType> GaussianFilterType;
-    GaussianFilterType::Pointer gaussianFilter = GaussianFilterType::New();
-    gaussianFilter->SetInput(reader->GetOutput());
-    gaussianFilter->SetVariance(1.0);
-    gaussianFilter->Update();
-
-    typedef itk::StatisticsImageFilter<ImageType> StatisticsFilterType;
-    StatisticsFilterType::Pointer statisticsFilter = StatisticsFilterType::New();
-    statisticsFilter->SetInput(gaussianFilter->GetOutput());
-    statisticsFilter->Update();
-    float signalVariance = statisticsFilter->GetMean() - noiseVariance;
-
-    // initialize output image
+    // Initialize output image
     ImageType::Pointer outputImage = ImageType::New();
     outputImage->CopyInformation(reader->GetOutput());
     outputImage->SetRegions(reader->GetOutput()->GetLargestPossibleRegion());
     outputImage->Allocate();
-    //output->SetRegions(reader->GetOutput()->GetRequestedRegion());
 
-    using ShapedNeighborhoodIteratorType = itk::ConstShapedNeighborhoodIterator<ImageType>;
+    typedef itk::ShapedNeighborhoodIterator<ImageType> ShapedNeighborhoodIteratorType;
 
-    // define a radius for the shaped neighborhood iterator
+    // Define a radius for the shaped neighborhood iterator
     ShapedNeighborhoodIteratorType::RadiusType radius;
     radius.Fill(radiusValue);
     ShapedNeighborhoodIteratorType it(radius, reader->GetOutput(), reader->GetOutput()->GetLargestPossibleRegion());
-
-    std::cout << "By default there are " << it.GetActiveIndexListSize() << " active indices." << std::endl;
 
     ShapedNeighborhoodIteratorType::OffsetType top = { { 0, -1 } };
     it.ActivateOffset(top);
     ShapedNeighborhoodIteratorType::OffsetType bottom = { { 0, 1 } };
     it.ActivateOffset(bottom);
-
-    std::cout << "Now there are " << it.GetActiveIndexListSize() << " active indices." << std::endl;
 
     ShapedNeighborhoodIteratorType::IndexListType                 indexList = it.GetActiveIndexList();
     ShapedNeighborhoodIteratorType::IndexListType::const_iterator listIterator = indexList.begin();
@@ -108,45 +76,53 @@ int main(int argc, char * argv[])
     using IteratorType = itk::ImageRegionIterator<ImageType>;
     IteratorType out(outputImage, outputImage->GetRequestedRegion());
 
-    // calculate mean and variance
+    // Loop pixels
     for (it.GoToBegin(), out.GoToBegin(); !it.IsAtEnd(); ++it, ++out)
     {
-        ImageType::PixelType convolutionPixel = 0.0;
+        // Algorithm and calculations
 
-        std::cout << "New position: " << std::endl;
+        // 1. Define a cubic neighborhood centered at (x,y,z) with a side length of N voxels
+        // std::cout << "Centered at " << it.GetIndex() << std::endl;
+        ImageType::IndexType index = it.GetIndex();
         ShapedNeighborhoodIteratorType::ConstIterator ci = it.Begin();
 
-        list<int> neighbors;
-        while (!ci.IsAtEnd())
-        {
-            convolutionPixel += ci.Get() * ci.Get();
+        // 2. Compute the local mean of the neighborhood
+        // mean = (1/N^3) * sum of voxel values in neighborhood
+        float mean = 0;
+        for (ci.GoToBegin(); !ci.IsAtEnd(); ++ci) {
+            mean += ci.Get();
+        }
+        mean /= index.size();
 
-            //neighbors.push_back(ci.Get());
+        // Compute the variance of the neighborhood
+        // variance = (1/N^3) * sum of squared differences between voxel values and mean
+        float variance = 0;
+        for (ci.GoToBegin(); !ci.IsAtEnd(); ++ci) {
+            float diff = ci.Get() - mean;
+            variance += diff * diff;
+        }
+        variance /= index.size();
 
-            std::cout << "Centered at " << it.GetIndex() << std::endl;
-            std::cout << "Neighborhood index " << ci.GetNeighborhoodIndex() << " is offset " << ci.GetNeighborhoodOffset()
-                      << " and has value " << static_cast<unsigned>(ci.Get()) << ". The real index is "
-                      << it.GetIndex() + ci.GetNeighborhoodOffset() << std::endl;
-            ++ci;
+        // 3. Compute the filter coefficient for the voxel using the Wiener filter formula
+        // w = variance / (variance + noise_variance)
+        float voxel_filter_coef = variance / (variance + noiseVariance);
+
+        // 4. Compute the filtered output value for the voxel using the weighted sum of the neighborhood
+        // filtered_value = sum of (w * voxel value) in neighborhood
+        double filteredValue = 0.0;
+        for (ci.GoToBegin(); !ci.IsAtEnd(); ++ci) {
+            filteredValue += (voxel_filter_coef * ci.Get());
         }
 
-        convolutionPixel = convolutionPixel / it.GetRadius().size();
-        ImageType::PixelType convolutionSquaredPixel = convolutionPixel * convolutionPixel;
-        ImageType::PixelType alpha = noiseVariance / statisticsFilter->GetMean();
-        ImageType::PixelType filterPixel = 1.0 / (1.0 + alpha * noiseVariance / convolutionSquaredPixel);
-        ImageType::PixelType outputPixel = convolutionPixel * filterPixel;
-        out.Set(outputPixel);
-        ++it;
-        ++out;
-
-        //int mean = getMean(neighbors);
-        //double variance = getVariance(neighbors, mean);
+        // 5. Set the output image voxel at (x,y,z) to the filtered output value
+        out.Set(filteredValue);
     }
 
+    // Create output image
     using WriterType = itk::ImageFileWriter<ImageType>;
 
     auto writer = WriterType::New();
-    writer->SetFileName(argv[2]);
+    writer->SetFileName(outputFileName);
     writer->SetInput(outputImage);
     try
     {
