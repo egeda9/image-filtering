@@ -4,19 +4,10 @@
 #include <itkNeighborhood.h>
 #include <itkImageRegionIterator.h>
 #include "itkImageFileWriter.h"
-#include "itkNeighborhoodAlgorithm.h"
 #include <itkDiscreteGaussianImageFilter.h>
 #include <itkStatisticsImageFilter.h>
-#include <bits/stdc++.h>
 
 using namespace std;
-
-// Compute the weight for a given voxel value, mean, and variance using the Wiener filter equation
-double computeWeight(double value, double mean, double variance, double noisePower) {
-    double signalPower = (value - mean) * (value - mean); // assume the signal power is equal to the square of the difference between the voxel value and the mean
-    double weight = (noisePower / (noisePower + signalPower));
-    return weight;
-}
 
 int main(int argc, char * argv[])
 {
