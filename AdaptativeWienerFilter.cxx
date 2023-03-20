@@ -67,6 +67,8 @@ int main(int argc, char * argv[])
     using IteratorType = itk::ImageRegionIterator<ImageType>;
     IteratorType out(outputImage, outputImage->GetRequestedRegion());
 
+    int size = radiusValue * radiusValue * radiusValue;
+
     // Loop pixels
     for (it.GoToBegin(), out.GoToBegin(); !it.IsAtEnd(); ++it, ++out)
     {
@@ -83,7 +85,7 @@ int main(int argc, char * argv[])
         for (ci.GoToBegin(); !ci.IsAtEnd(); ++ci) {
             mean += ci.Get();
         }
-        mean /= index.size();
+        mean /= size;
 
         // Compute the variance of the neighborhood
         // variance = (1/N^3) * sum of squared differences between voxel values and mean
@@ -92,7 +94,7 @@ int main(int argc, char * argv[])
             float diff = ci.Get() - mean;
             variance += diff * diff;
         }
-        variance /= index.size();
+        variance /= size;
 
         // 3. Compute the filter coefficient for the voxel using the Wiener filter formula
         // w = variance / (variance + noise_variance)
